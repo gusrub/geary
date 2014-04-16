@@ -6,7 +6,7 @@
 
 private class Geary.ImapEngine.AccountSynchronizer : Geary.BaseObject {
     private const int FETCH_DATE_RECEIVED_CHUNK_COUNT = 25;
-    private const int SYNC_DELAY_SEC = 15;
+    private const int SYNC_DELAY_SEC = 5;
     
     public GenericAccount account { get; private set; }
     
