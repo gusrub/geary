@@ -2031,56 +2031,55 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
             return;
         
         StringBuilder sql = new StringBuilder("""
-            SELECT id, fields FROM MessageTable WHERE id IN (
+            SELECT id FROM MessageTable WHERE fields <> ? AND id IN (
         """);
         bool first = true;
-        for (int ctr = 0; ctr < locations.size; ctr++) {
+        foreach (LocationIdentifier location in locations) {
             if (!first)
                 sql.append(",");
             
-            sql.append(locations[ctr].message_id.to_string());
+            sql.append(location.message_id.to_string());
             first = false;
         }
         sql.append(")");
         
         Db.Statement stmt = cx.prepare(sql.str);
+        stmt.bind_int(0, Geary.Email.Field.ALL);
+        
         Db.Result results = stmt.exec(cancellable);
         
-        Gee.HashSet<int64?> complete_locations = new Gee.HashSet<int64?>(Collection.int64_hash_func,
+        Gee.HashSet<int64?> incomplete_locations = new Gee.HashSet<int64?>(Collection.int64_hash_func,
             Collection.int64_equal_func);
         while (!results.finished) {
-            if (results.int_at(1) == Geary.Email.Field.ALL)
-                complete_locations.add(results.int64_at(0));
-            
+            incomplete_locations.add(results.int64_at(0));
             results.next(cancellable);
         }
         
-        if (complete_locations.size == 0) {
-            debug("No complete locations found (out of %d)", locations.size);
-            
-            return;
-        }
-        
-        // simple optimization, but worth it
-        if (complete_locations.size == locations.size) {
-            debug("All %d locations, complete, clearing return list", locations.size);
+        if (incomplete_locations.size == 0) {
+            debug("No incomplete locations found (out of %d), clearing return list", locations.size);
             locations.clear();
             
             return;
         }
         
-        debug("%d complete locations out of %d found, removing...", complete_locations.size,
+        // simple optimization, but worth it
+        if (incomplete_locations.size == locations.size) {
+            debug("All %d locations incomplete", locations.size);
+            
+            return;
+        }
+        
+        debug("%d incomplete locations out of %d found, removing...", incomplete_locations.size,
             locations.size);
         
         int original_size = locations.size;
         Gee.Iterator<LocationIdentifier> iter = locations.iterator();
         while (iter.next()) {
-            if (complete_locations.contains(iter.get().message_id))
+            if (!incomplete_locations.contains(iter.get().message_id))
                 iter.remove();
         }
         
         debug("Removed, %d -> %d locations remaining", original_size, locations.size);
-        assert(locations.size == (original_size - complete_locations.size));
     }
     
     private LocationIdentifier? do_get_location_for_id(Db.Connection cx, ImapDB.EmailIdentifier id,
