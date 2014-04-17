@@ -288,14 +288,42 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
             
             locations = do_results_to_locations(stmt.exec(cancellable), flags, cancellable);
             
-            if (only_incomplete)
-                do_remove_complete_locations(cx, locations, cancellable);
-            
             if (locations.size > count)
                 locations = locations.slice(0, count);
             
             return Db.TransactionOutcome.SUCCESS;
         }, cancellable);
+        
+        if (only_incomplete && locations.size > 0) {
+            debug("Stripping %d locations in chunks...", locations.size);
+            
+            Gee.ArrayList<LocationIdentifier> accumulator = new Gee.ArrayList<LocationIdentifier>();
+            
+            int start = 0;
+            do {
+                int end = Numeric.int_ceiling(start + 10000, locations.size);
+                Gee.List<LocationIdentifier>? slice = locations.slice(start, end);
+                if (slice == null)
+                    break;
+                
+                debug("start=%d end=%d slice=%d", start, end, slice.size);
+                
+                // increment *before* the slice is stripped of complete emails
+                start = end;
+                
+                yield db.exec_transaction_async(Db.TransactionType.RO, (cx) => {
+                    do_remove_complete_locations(cx, slice, cancellable);
+                    
+                    return Db.TransactionOutcome.SUCCESS;
+                }, cancellable);
+                
+                accumulator.add_all(slice);
+            } while (start < locations.size);
+            
+            debug("Complete locations dropped in chunks, %d -> %d", locations.size, accumulator.size);
+            
+            locations = accumulator;
+        }
         
         // Next, read in email in chunks
         return yield list_email_in_chunks_async(locations, required_fields, flags, cancellable);
@@ -2036,12 +2064,12 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
         bool first = true;
         foreach (LocationIdentifier location in locations) {
             if (!first)
-                sql.append(",");
+                sql.append_unichar(',');
             
             sql.append(location.message_id.to_string());
             first = false;
         }
-        sql.append(")");
+        sql.append_unichar(')');
         
         Db.Statement stmt = cx.prepare(sql.str);
         stmt.bind_int(0, Geary.Email.Field.ALL);
