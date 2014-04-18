@@ -301,7 +301,7 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
             
             int start = 0;
             do {
-                int end = Numeric.int_ceiling(start + 10000, locations.size);
+                int end = Numeric.int_ceiling(start + 1000000, locations.size);
                 Gee.List<LocationIdentifier>? slice = locations.slice(start, end);
                 if (slice == null)
                     break;
@@ -2059,17 +2059,8 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
             return;
         
         StringBuilder sql = new StringBuilder("""
-            SELECT id FROM MessageTable WHERE fields <> ? AND id IN (
+            SELECT id FROM MessageTable WHERE fields <> ?
         """);
-        bool first = true;
-        foreach (LocationIdentifier location in locations) {
-            if (!first)
-                sql.append_unichar(',');
-            
-            sql.append(location.message_id.to_string());
-            first = false;
-        }
-        sql.append_unichar(')');
         
         Db.Statement stmt = cx.prepare(sql.str);
         stmt.bind_int(0, Geary.Email.Field.ALL);
@@ -2084,21 +2075,15 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
         }
         
         if (incomplete_locations.size == 0) {
-            debug("No incomplete locations found (out of %d), clearing return list", locations.size);
+            debug("No incomplete locations found (looking for %d), clearing return list", locations.size);
             locations.clear();
             
             return;
         }
         
-        // simple optimization, but worth it
-        if (incomplete_locations.size == locations.size) {
-            debug("All %d locations incomplete", locations.size);
-            
-            return;
-        }
-        
-        debug("%d incomplete locations out of %d found, removing...", incomplete_locations.size,
+        debug("%d incomplete locations (looking for %d), removing...", incomplete_locations.size,
             locations.size);
+        Timer timer = new Timer();
         
         int original_size = locations.size;
         Gee.Iterator<LocationIdentifier> iter = locations.iterator();
@@ -2108,6 +2093,7 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
         }
         
         debug("Removed, %d -> %d locations remaining", original_size, locations.size);
+        debug("REMOVE TIME: %lf", timer.elapsed());
     }
     
     private LocationIdentifier? do_get_location_for_id(Db.Connection cx, ImapDB.EmailIdentifier id,
