@@ -69,10 +69,18 @@ private class Geary.ImapEngine.EmailPrefetcher : Object {
         if (schedule_id != 0) {
             Source.remove(schedule_id);
             schedule_id = 0;
+            
+            // since an acquire was done when scheduled, need to notify when cancelled
+            active_sem.blind_notify();
         }
     }
     
     private void on_local_expansion(Gee.Collection<Geary.EmailIdentifier> ids) {
+        // it's possible to be notified of an append prior to remote open; don't prefetch until
+        // that occurs
+        if (folder.get_open_state() != Geary.Folder.OpenState.BOTH)
+            return;
+        
         // acquire here since .begin() only schedules for later
         active_sem.acquire();
         do_prepare_new_async.begin(ids);
@@ -88,20 +96,20 @@ private class Geary.ImapEngine.EmailPrefetcher : Object {
         prefetch_emails.add_all(emails);
         
         // only increment active state if not rescheduling
-        if (schedule_id != 0)
+        if (schedule_id != 0) {
+            debug("Rescheduling prefetch task");
             Source.remove(schedule_id);
-        else
+        } else {
+            debug("Scheduling new prefetch task");
             active_sem.acquire();
+        }
         
-        schedule_id = Timeout.add_seconds(start_delay_sec, on_start_prefetch);
-    }
-    
-    private bool on_start_prefetch() {
-        do_prefetch_async.begin();
-        
-        schedule_id = 0;
-        
-        return false;
+        schedule_id = Timeout.add_seconds(start_delay_sec, () => {
+            schedule_id = 0;
+            do_prefetch_async.begin();
+            
+            return false;
+        });
     }
     
     private async void do_prepare_all_local_async() {
@@ -123,9 +131,11 @@ private class Geary.ImapEngine.EmailPrefetcher : Object {
     private async void do_prepare_new_async(Gee.Collection<Geary.EmailIdentifier> ids) {
         Gee.List<Geary.Email>? list = null;
         try {
+            debug("LIsting new %d emails needing prefetching in %s...", ids.size, folder.to_string());
             list = yield folder.local_folder.list_email_by_sparse_id_async(
                 (Gee.Collection<ImapDB.EmailIdentifier>) ids,
                 Geary.Email.Field.PROPERTIES, ImapDB.Folder.ListFlags.ONLY_INCOMPLETE, cancellable);
+            debug("Listed new emails needing prefetching in %s", folder.to_string());
         } catch (Error err) {
             debug("Error while list local emails for %s: %s", folder.to_string(), err.message);
         }

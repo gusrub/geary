@@ -35,6 +35,8 @@ public class Geary.Nonblocking.CountingSemaphore : Geary.Nonblocking.AbstractSem
     public int acquire() {
         count++;
         
+        debug("CountingSemaphore acquired, new count=%d", count);
+        
         // store on stack in case of reentrancy from signal handler; also note that Vala doesn't
         // deal well with properties, pre/post-inc, and assignment on same line
         int new_count = count;
@@ -57,6 +59,8 @@ public class Geary.Nonblocking.CountingSemaphore : Geary.Nonblocking.AbstractSem
             throw new NonblockingError.INVALID("notify() on a zeroed CountingSemaphore");
         
         count--;
+        
+        debug("CountingSempahore notified, new count=%d", count);
         
         // store on stack in case of reentrancy from signal handler; also note that Vala doesn't
         // deal well with properties, pre/post-inc, and assignment on same line
