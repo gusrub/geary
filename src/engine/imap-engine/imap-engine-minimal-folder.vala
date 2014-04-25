@@ -816,12 +816,17 @@ private class Geary.ImapEngine.MinimalFolder : Geary.AbstractFolder, Geary.Folde
                 folder.reestablish_delay_msec);
             
             yield Scheduler.sleep_ms_async(folder.reestablish_delay_msec);
-            // double now, reset to init value when cleanly opened
-            folder.reestablish_delay_msec = (folder.reestablish_delay_msec * 2).clamp(
-                DEFAULT_REESTABLISH_DELAY_MSEC, MAX_REESTABLISH_DELAY_MSEC);
             
             try {
-                yield folder.open_async(OpenFlags.NO_DELAY, null);
+                if (folder.open_count > 0) {
+                    // double now, reset to init value when cleanly opened
+                    folder.reestablish_delay_msec = (folder.reestablish_delay_msec * 2).clamp(
+                        DEFAULT_REESTABLISH_DELAY_MSEC, MAX_REESTABLISH_DELAY_MSEC);
+                    
+                    yield folder.open_async(OpenFlags.NO_DELAY, null);
+                } else {
+                    debug("%s: Not reestablishing broken connection, folder was closed", folder.to_string());
+                }
             } catch (Error err) {
                 debug("Error reestablishing broken connection to %s: %s", folder.to_string(), err.message);
             }
