@@ -359,7 +359,7 @@ private class Geary.ImapEngine.AccountSynchronizer : Geary.BaseObject {
                     break;
                 }
                 
-                current_epoch = current_epoch.add_months(-3);
+                current_epoch = current_epoch.add_months(-1);
                 
                 // if past max_epoch, then just pull in everything and be done with it
                 if (current_epoch.compare(max_epoch) < 0) {

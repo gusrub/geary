@@ -21,6 +21,7 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
     private const int LIST_EMAIL_WITH_MESSAGE_CHUNK_COUNT = 10;
     private const int LIST_EMAIL_METADATA_COUNT = 100;
     private const int LIST_EMAIL_FIELDS_CHUNK_COUNT = 500;
+    private const int CREATE_MERGE_EMAIL_CHUNK_COUNT = 100;
     
     [Flags]
     public enum ListFlags {
@@ -180,45 +181,59 @@ private class Geary.ImapDB.Folder : BaseObject, Geary.ReferenceSemantics {
     public async Gee.Map<Geary.Email, bool> create_or_merge_email_async(Gee.Collection<Geary.Email> emails,
         Cancellable? cancellable) throws Error {
         Gee.HashMap<Geary.Email, bool> results = new Gee.HashMap<Geary.Email, bool>();
-        Gee.ArrayList<Geary.EmailIdentifier> complete_ids = new Gee.ArrayList<Geary.EmailIdentifier>();
-        Gee.Collection<Contact> updated_contacts = new Gee.ArrayList<Contact>();
-        int total_unread_change = 0;
-        yield db.exec_transaction_async(Db.TransactionType.RW, (cx) => {
-            foreach (Geary.Email email in emails) {
-                Gee.Collection<Contact>? contacts_this_email = null;
-                Geary.Email.Field pre_fields;
-                Geary.Email.Field post_fields;
-                int unread_change = 0;
-                bool created = do_create_or_merge_email(cx, email, out pre_fields,
-                    out post_fields, out contacts_this_email, ref unread_change, cancellable);
-                
-                if (contacts_this_email != null)
-                    updated_contacts.add_all(contacts_this_email);
-                
-                results.set(email, created);
-                
-                // in essence, only fire the "email-completed" signal if the local version didn't
-                // have all the fields but after the create/merge now does
-                if (post_fields.is_all_set(Geary.Email.Field.ALL) && !pre_fields.is_all_set(Geary.Email.Field.ALL))
-                    complete_ids.add(email.id);
-                
-                // Update unread count in DB.
-                do_add_to_unread_count(cx, unread_change, cancellable);
-                
-                total_unread_change += unread_change;
-            }
+        
+        Gee.ArrayList<Geary.Email> list = traverse<Geary.Email>(emails).to_array_list();
+        int index = 0;
+        while (index < list.size) {
+            int stop = Numeric.int_ceiling(index + CREATE_MERGE_EMAIL_CHUNK_COUNT, list.size);
+            Gee.List<Geary.Email> slice = list.slice(index, stop);
+            debug("%s: creating/merging %d emails (%d:%d/%d)", to_string(), slice.size, index, stop,
+                list.size);
             
-            return Db.TransactionOutcome.COMMIT;
-        }, cancellable);
-        
-        if (updated_contacts.size > 0)
-            contact_store.update_contacts(updated_contacts);
-        
-        // Update the email_unread properties.
-        properties.set_status_unseen((properties.email_unread + total_unread_change).clamp(0, int.MAX));
-        
-        if (complete_ids.size > 0)
-            email_complete(complete_ids);
+            Gee.ArrayList<Geary.EmailIdentifier> complete_ids = new Gee.ArrayList<Geary.EmailIdentifier>();
+            Gee.Collection<Contact> updated_contacts = new Gee.ArrayList<Contact>();
+            int total_unread_change = 0;
+            yield db.exec_transaction_async(Db.TransactionType.RW, (cx) => {
+                foreach (Geary.Email email in slice) {
+                    Gee.Collection<Contact>? contacts_this_email = null;
+                    Geary.Email.Field pre_fields;
+                    Geary.Email.Field post_fields;
+                    int unread_change = 0;
+                    bool created = do_create_or_merge_email(cx, email, out pre_fields,
+                        out post_fields, out contacts_this_email, ref unread_change, cancellable);
+                    
+                    if (contacts_this_email != null)
+                        updated_contacts.add_all(contacts_this_email);
+                    
+                    results.set(email, created);
+                    
+                    // in essence, only fire the "email-completed" signal if the local version didn't
+                    // have all the fields but after the create/merge now does
+                    if (post_fields.is_all_set(Geary.Email.Field.ALL) && !pre_fields.is_all_set(Geary.Email.Field.ALL))
+                        complete_ids.add(email.id);
+                    
+                    // Update unread count in DB.
+                    do_add_to_unread_count(cx, unread_change, cancellable);
+                    
+                    total_unread_change += unread_change;
+                }
+                
+                return Db.TransactionOutcome.COMMIT;
+            }, cancellable);
+            
+            if (updated_contacts.size > 0)
+                contact_store.update_contacts(updated_contacts);
+            
+            // Update the email_unread properties.
+            properties.set_status_unseen((properties.email_unread + total_unread_change).clamp(0, int.MAX));
+            
+            if (complete_ids.size > 0)
+                email_complete(complete_ids);
+            
+            index = stop;
+            if (index < list.size)
+                yield Scheduler.sleep_ms_async(100);
+        }
         
         return results;
     }
